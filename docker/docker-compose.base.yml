@@ -3,7 +3,6 @@ services:
     build:
       context: ../services/api-gateway
       dockerfile: Dockerfile
-    
     ports:
       - "3000:3000"
     environment:
@@ -12,16 +11,17 @@ services:
       PRODUCT_SERVICE_URL: http://product-service:3002
     depends_on:
       user-service:
-        condition: service_started
+        condition: service_healthy
       product-service:
-        condition: service_started
+        condition: service_healthy
     networks:
       - microservices-network
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 10s
-      timeout: 5s
-      retries: 10
+      timeout: 10s
+      retries: 40
+      start_period: 90s
     profiles:
       - app
       - test
@@ -32,7 +32,6 @@ services:
     build:
       context: ../services/user-service
       dockerfile: Dockerfile
-    
     ports:
       - "3001:3001"
     environment:
@@ -57,8 +56,9 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 10s
-      timeout: 5s
-      retries: 10
+      timeout: 10s
+      retries: 40
+      start_period: 120s
     profiles:
       - app
       - test
@@ -69,7 +69,6 @@ services:
     build:
       context: ../services/product-service
       dockerfile: Dockerfile
-    
     ports:
       - "3002:3002"
     environment:
@@ -87,8 +86,9 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3002/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 10s
-      timeout: 5s
-      retries: 10
+      timeout: 10s
+      retries: 40
+      start_period: 120s
     profiles:
       - app
       - test
@@ -97,7 +97,6 @@ services:
 
   postgres:
     image: postgres:15-alpine
-    
     ports:
       - "5434:5432"
     environment:
@@ -110,10 +109,11 @@ services:
     networks:
       - microservices-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U user -d userdb"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
+      test: ["CMD-SHELL", "pg_isready -U user -d userdb -h localhost"]
+      interval: 10s
+      timeout: 10s
+      retries: 60
+      start_period: 180s
     profiles:
       - app
       - test
@@ -122,16 +122,16 @@ services:
 
   redis:
     image: redis:7-alpine
-    
     ports:
       - "6380:6379"
     networks:
       - microservices-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 30s
     profiles:
       - app
       - test
@@ -140,17 +140,17 @@ services:
 
   rabbitmq:
     image: rabbitmq:3-management-alpine
-    
     ports:
       - "5673:5672"
       - "15673:15672"
     networks:
       - microservices-network
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"]
       interval: 10s
-      timeout: 5s
-      retries: 10
+      timeout: 10s
+      retries: 60
+      start_period: 180s
     profiles:
       - app
       - test
@@ -159,7 +159,6 @@ services:
 
   prometheus:
     image: prom/prometheus:latest
-    
     ports:
       - "9090:9090"
     volumes:
