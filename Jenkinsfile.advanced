@@ -1,0 +1,225 @@
+pipeline {
+    agent any
+
+    options {
+        timestamps()
+        timeout(time: 45, unit: 'MINUTES')
+    }
+
+    environment {
+        COMPOSE_FILE = 'docker/docker-compose.base.yml'
+        JENKINS_CONTAINER = 'jenkins-server'
+    }
+
+    stages {
+        stage('Preparación del Entorno') {
+            steps {
+                echo 'Preparando ambiente para pipeline avanzado de microservicios...'
+
+                script {
+                    def branch = env.BRANCH_NAME ?: 'main'
+                    def safeBranch = branch.toLowerCase()
+                                           .replaceAll(/[^a-z0-9]+/, '-')
+                                           .replaceAll(/^-+|-+$/, '')
+
+                    if (!safeBranch?.trim()) {
+                        safeBranch = 'main'
+                    }
+
+                    env.SAFE_BRANCH = safeBranch
+                    env.COMPOSE_PROJECT_NAME = "micro-${safeBranch}"
+
+                    echo "Rama detectada: ${branch}"
+                    echo "Nombre seguro de rama: ${env.SAFE_BRANCH}"
+                    echo "Proyecto Docker Compose: ${env.COMPOSE_PROJECT_NAME}"
+                }
+
+                sh '''
+                    echo "Verificando herramientas disponibles..."
+                    docker version
+                    docker compose version
+                    node --version || true
+                    npm --version || true
+
+                    mkdir -p rollback-logs
+                    chmod +x scripts/*.sh || true
+                '''
+            }
+        }
+
+        stage('Instalación de Dependencias') {
+            steps {
+                echo 'Instalando dependencias de los tres microservicios...'
+
+                sh '''
+                    cd services/api-gateway
+                    npm ci || npm install
+                    cd ../..
+
+                    cd services/user-service
+                    npm ci || npm install
+                    cd ../..
+
+                    cd services/product-service
+                    npm ci || npm install
+                    cd ../..
+                '''
+            }
+        }
+
+        stage('Pruebas Unitarias') {
+            steps {
+                echo 'Ejecutando pruebas unitarias de cada microservicio...'
+
+                sh '''
+                    cd services/api-gateway
+                    npm test
+                    cd ../..
+
+                    cd services/user-service
+                    npm test
+                    cd ../..
+
+                    cd services/product-service
+                    npm test
+                    cd ../..
+                '''
+            }
+        }
+
+        stage('Construcción de Imágenes') {
+            steps {
+                echo 'Construyendo imágenes Docker de los microservicios...'
+
+                sh '''
+                    docker compose -p "$COMPOSE_PROJECT_NAME" \
+                        -f "$COMPOSE_FILE" \
+                        --profile app \
+                        --profile monitoring \
+                        build
+                '''
+            }
+        }
+
+        stage('Despliegue Ambiente Efímero') {
+            steps {
+                echo 'Levantando ambiente efímero con Docker Compose...'
+
+                sh '''
+                    docker compose -p "$COMPOSE_PROJECT_NAME" \
+                        -f "$COMPOSE_FILE" \
+                        --profile app \
+                        --profile monitoring \
+                        up -d
+
+                    docker compose -p "$COMPOSE_PROJECT_NAME" \
+                        -f "$COMPOSE_FILE" \
+                        --profile app \
+                        --profile monitoring \
+                        ps
+                '''
+            }
+        }
+
+        stage('Health Checks y Seed') {
+            steps {
+                echo 'Validando servicios y cargando datos iniciales...'
+
+                sh '''
+                    echo "Ejecutando health-check dentro de la red Docker..."
+                    docker run --rm \
+                        --network "${COMPOSE_PROJECT_NAME}_microservices-network" \
+                        --volumes-from "$JENKINS_CONTAINER" \
+                        -w "$WORKSPACE" \
+                        alpine:latest \
+                        sh -c "apk add --no-cache curl >/dev/null && sh scripts/health-check.sh"
+
+                    echo "Insertando datos iniciales..."
+                    docker run --rm \
+                        --network "${COMPOSE_PROJECT_NAME}_microservices-network" \
+                        --volumes-from "$JENKINS_CONTAINER" \
+                        -w "$WORKSPACE" \
+                        alpine:latest \
+                        sh -c "apk add --no-cache curl >/dev/null && sh scripts/seed-database.sh"
+                '''
+            }
+        }
+
+        stage('Pruebas de Contrato') {
+            steps {
+                echo 'Ejecutando validación de contrato entre API Gateway y User Service...'
+
+                sh '''
+                    docker run --rm \
+                        --network "${COMPOSE_PROJECT_NAME}_microservices-network" \
+                        --volumes-from "$JENKINS_CONTAINER" \
+                        -w "$WORKSPACE" \
+                        -e API_GATEWAY_URL="http://api-gateway:3000" \
+                        node:20-alpine \
+                        node scripts/validate-contract.js
+                '''
+            }
+        }
+
+        stage('Pruebas de Carga con K6') {
+            steps {
+                echo 'Ejecutando pruebas de carga con K6...'
+
+                sh '''
+                    docker run --rm \
+                        --network "${COMPOSE_PROJECT_NAME}_microservices-network" \
+                        --volumes-from "$JENKINS_CONTAINER" \
+                        -w "$WORKSPACE" \
+                        grafana/k6 \
+                        run tests/performance/load.js
+                '''
+            }
+        }
+
+        stage('Verificación de Prometheus') {
+            steps {
+                echo 'Validando que Prometheus esté disponible dentro del ambiente...'
+
+                sh '''
+                    docker run --rm \
+                        --network "${COMPOSE_PROJECT_NAME}_microservices-network" \
+                        alpine:latest \
+                        sh -c "apk add --no-cache curl >/dev/null && curl -f http://prometheus:9090/-/healthy"
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Pipeline ejecutado correctamente. Limpiando ambiente efímero...'
+
+            sh '''
+                docker compose -p "$COMPOSE_PROJECT_NAME" \
+                    -f "$COMPOSE_FILE" \
+                    --profile app \
+                    --profile monitoring \
+                    down --remove-orphans || true
+            '''
+        }
+
+        failure {
+            echo 'Pipeline falló. Ejecutando rollback automático...'
+
+            sh '''
+                sh scripts/rollback.sh "$COMPOSE_PROJECT_NAME" "$COMPOSE_FILE" || true
+            '''
+        }
+
+        always {
+            echo 'Guardando evidencia del pipeline...'
+
+            archiveArtifacts artifacts: 'rollback-logs/*.log', allowEmptyArchive: true
+
+            sh '''
+                echo "Estado final de Docker después del pipeline:"
+                docker ps || true
+            '''
+        }
+    }
+}

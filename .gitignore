@@ -1,0 +1,14 @@
+node_modules/
+coverage/
+rollback-logs/
+.env
+npm-debug.log*
+.DS_Store
+
+services/api-gateway/node_modules/
+services/user-service/node_modules/
+services/product-service/node_modules/
+
+services/api-gateway/coverage/
+services/user-service/coverage/
+services/product-service/coverage/

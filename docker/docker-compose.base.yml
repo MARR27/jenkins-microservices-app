@@ -1,0 +1,187 @@
+services:
+  api-gateway:
+    build:
+      context: ../services/api-gateway
+      dockerfile: Dockerfile
+    
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      USER_SERVICE_URL: http://user-service:3001
+      PRODUCT_SERVICE_URL: http://product-service:3002
+    depends_on:
+      user-service:
+        condition: service_started
+      product-service:
+        condition: service_started
+    networks:
+      - microservices-network
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    profiles:
+      - app
+      - test
+      - e2e
+      - performance
+
+  user-service:
+    build:
+      context: ../services/user-service
+      dockerfile: Dockerfile
+    
+    ports:
+      - "3001:3001"
+    environment:
+      PORT: 3001
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: userdb
+      DB_USER: user
+      DB_PASSWORD: password
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      RABBITMQ_URL: amqp://rabbitmq
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - microservices-network
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    profiles:
+      - app
+      - test
+      - e2e
+      - performance
+
+  product-service:
+    build:
+      context: ../services/product-service
+      dockerfile: Dockerfile
+    
+    ports:
+      - "3002:3002"
+    environment:
+      PORT: 3002
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: productdb
+      DB_USER: user
+      DB_PASSWORD: password
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - microservices-network
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3002/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    profiles:
+      - app
+      - test
+      - e2e
+      - performance
+
+  postgres:
+    image: postgres:15-alpine
+    
+    ports:
+      - "5434:5432"
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: userdb
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ../shared/database/migrations:/docker-entrypoint-initdb.d
+    networks:
+      - microservices-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d userdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    profiles:
+      - app
+      - test
+      - e2e
+      - performance
+
+  redis:
+    image: redis:7-alpine
+    
+    ports:
+      - "6380:6379"
+    networks:
+      - microservices-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    profiles:
+      - app
+      - test
+      - e2e
+      - performance
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    
+    ports:
+      - "5673:5672"
+      - "15673:15672"
+    networks:
+      - microservices-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    profiles:
+      - app
+      - test
+      - e2e
+      - performance
+
+  prometheus:
+    image: prom/prometheus:latest
+    
+    ports:
+      - "9090:9090"
+    volumes:
+      - ../monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+      user-service:
+        condition: service_healthy
+      product-service:
+        condition: service_healthy
+    networks:
+      - microservices-network
+    profiles:
+      - monitoring
+      - performance
+
+networks:
+  microservices-network:
+    driver: bridge
+
+volumes:
+  postgres-data:

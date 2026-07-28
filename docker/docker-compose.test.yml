@@ -1,0 +1,27 @@
+include:
+  - docker-compose.base.yml
+
+services:
+  api-gateway:
+    profiles:
+      - test
+
+  user-service:
+    profiles:
+      - test
+
+  product-service:
+    profiles:
+      - test
+
+  postgres:
+    profiles:
+      - test
+
+  redis:
+    profiles:
+      - test
+
+  rabbitmq:
+    profiles:
+      - test

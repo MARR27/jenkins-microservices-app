@@ -1,0 +1,39 @@
+{
+  "service": "user-service",
+  "version": "1.0.0",
+  "description": "Contrato esperado para las respuestas del User Service",
+  "endpoints": [
+    {
+      "name": "Listar usuarios",
+      "method": "GET",
+      "path": "/users",
+      "expectedStatus": 200,
+      "expectedFields": {
+        "total": "number",
+        "data": "array"
+      },
+      "dataItemFields": {
+        "id": "number",
+        "name": "string",
+        "email": "string",
+        "created_at": "string"
+      }
+    },
+    {
+      "name": "Crear usuario",
+      "method": "POST",
+      "path": "/users",
+      "expectedStatus": 200,
+      "body": {
+        "name": "Contrato Test",
+        "email": "contrato.test@example.com"
+      },
+      "expectedFields": {
+        "id": "number",
+        "name": "string",
+        "email": "string",
+        "created_at": "string"
+      }
+    }
+  ]
+}

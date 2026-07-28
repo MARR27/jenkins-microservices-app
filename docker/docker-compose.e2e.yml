@@ -1,0 +1,27 @@
+include:
+  - docker-compose.base.yml
+
+services:
+  api-gateway:
+    profiles:
+      - e2e
+
+  user-service:
+    profiles:
+      - e2e
+
+  product-service:
+    profiles:
+      - e2e
+
+  postgres:
+    profiles:
+      - e2e
+
+  redis:
+    profiles:
+      - e2e
+
+  rabbitmq:
+    profiles:
+      - e2e
