@@ -75,7 +75,7 @@ services:
       PORT: 3002
       DB_HOST: postgres
       DB_PORT: 5432
-      DB_NAME: productdb
+      DB_NAME: userdb
       DB_USER: user
       DB_PASSWORD: password
     depends_on:

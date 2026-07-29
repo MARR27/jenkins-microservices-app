@@ -6,17 +6,18 @@ const port = process.env.PORT || 3002;
 
 app.use(express.json());
 
-// PostgreSQL
 const pool = new Pool({
   host: process.env.DB_HOST || 'postgres',
   port: process.env.DB_PORT || 5432,
-  database: process.env.DB_NAME || 'productdb',
+  database: process.env.DB_NAME || 'userdb',
   user: process.env.DB_USER || 'user',
   password: process.env.DB_PASSWORD || 'password',
   max: 20,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 5000,
+  connectionTimeoutMillis: 10000,
 });
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const createProductsTable = async () => {
   await pool.query(`
@@ -30,7 +31,25 @@ const createProductsTable = async () => {
   `);
 };
 
-// Crear producto
+const ensureDatabaseReady = async (attempts = 10) => {
+  let lastError = null;
+
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      await pool.query('SELECT 1');
+      await createProductsTable();
+      await pool.query('SELECT COUNT(*) FROM products');
+      return true;
+    } catch (error) {
+      lastError = error;
+      console.log(`Product Service DB intento ${i}/${attempts} falló: ${error.message}`);
+      await sleep(2000);
+    }
+  }
+
+  throw lastError;
+};
+
 app.post('/products', async (req, res) => {
   const { name, price, stock } = req.body;
 
@@ -41,7 +60,7 @@ app.post('/products', async (req, res) => {
   }
 
   try {
-    await createProductsTable();
+    await ensureDatabaseReady(3);
 
     const result = await pool.query(
       'INSERT INTO products (name, price, stock, created_at) VALUES ($1, $2, $3, NOW()) RETURNING *',
@@ -50,16 +69,18 @@ app.post('/products', async (req, res) => {
 
     return res.status(201).json(result.rows[0]);
   } catch (error) {
+    console.error('Error creating product:', error.message);
+
     return res.status(500).json({
-      error: error.message,
+      error: 'Database error creating product',
+      detail: error.message,
     });
   }
 });
 
-// Listar productos
 app.get('/products', async (req, res) => {
   try {
-    await createProductsTable();
+    await ensureDatabaseReady(3);
 
     const result = await pool.query(
       'SELECT id, name, price, stock, created_at FROM products ORDER BY id ASC'
@@ -70,20 +91,25 @@ app.get('/products', async (req, res) => {
       data: result.rows,
     });
   } catch (error) {
+    console.error('Error listing products:', error.message);
+
     return res.status(500).json({
-      error: error.message,
+      error: 'Database error listing products',
+      detail: error.message,
     });
   }
 });
 
-// Obtener producto por ID
 app.get('/products/:id', async (req, res) => {
   const productId = req.params.id;
 
   try {
-    await createProductsTable();
+    await ensureDatabaseReady(3);
 
-    const result = await pool.query('SELECT * FROM products WHERE id = $1', [productId]);
+    const result = await pool.query(
+      'SELECT id, name, price, stock, created_at FROM products WHERE id = $1',
+      [productId]
+    );
 
     if (result.rows.length === 0) {
       return res.status(404).json({
@@ -96,13 +122,15 @@ app.get('/products/:id', async (req, res) => {
       data: result.rows[0],
     });
   } catch (error) {
+    console.error('Error getting product:', error.message);
+
     return res.status(500).json({
-      error: error.message,
+      error: 'Database error getting product',
+      detail: error.message,
     });
   }
 });
 
-// Health check
 app.get('/health', async (req, res) => {
   const health = {
     status: 'healthy',
@@ -110,21 +138,26 @@ app.get('/health', async (req, res) => {
     timestamp: new Date().toISOString(),
     services: {
       database: 'unknown',
+      productsTable: 'unknown',
     },
   };
 
   try {
-    await pool.query('SELECT 1');
+    await ensureDatabaseReady(3);
     health.services.database = 'connected';
-  } catch (error) {
-    health.services.database = 'disconnected';
-    health.status = 'degraded';
-  }
+    health.services.productsTable = 'ready';
 
-  return res.json(health);
+    return res.status(200).json(health);
+  } catch (error) {
+    health.status = 'unhealthy';
+    health.services.database = 'disconnected';
+    health.services.productsTable = 'not_ready';
+    health.error = error.message;
+
+    return res.status(503).json(health);
+  }
 });
 
-// Métricas en formato Prometheus
 app.get('/metrics', (req, res) => {
   const memory = process.memoryUsage();
 
@@ -149,9 +182,10 @@ if (require.main === module) {
     console.log(`Product Service running on port ${port}`);
 
     try {
-      await createProductsTable();
+      await ensureDatabaseReady(10);
+      console.log('Product Service database ready');
     } catch (error) {
-      console.error('Error creating products table:', error.message);
+      console.error('Product Service database not ready:', error.message);
     }
   });
 }
@@ -160,4 +194,5 @@ module.exports = {
   app,
   pool,
   createProductsTable,
+  ensureDatabaseReady,
 };
