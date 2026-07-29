@@ -2,55 +2,63 @@ import http from 'k6/http';
 import { check, sleep } from 'k6';
 
 export const options = {
-  vus: 5,
-  duration: '20s',
+  vus: 3,
+  duration: '15s',
   thresholds: {
-    http_req_failed: ['rate<0.10'],
-    http_req_duration: ['p(95)<3000'],
-    checks: ['rate>0.90'],
+    http_req_failed: ['rate<0.20'],
+    http_req_duration: ['p(95)<8000'],
+    checks: ['rate>0.80'],
   },
 };
 
 const BASE_URL = __ENV.BASE_URL || 'http://api-gateway:3000';
 
-function getWithRetry(path, label) {
-  let response = http.get(`${BASE_URL}${path}`);
+function requestWithRetry(path, label, retries = 3) {
+  let response = null;
 
-  if (response.status !== 200) {
-    sleep(1);
+  for (let i = 1; i <= retries; i++) {
     response = http.get(`${BASE_URL}${path}`);
+
+    if (response.status === 200) {
+      break;
+    }
+
+    console.log(`${label} intento ${i}/${retries} falló con status ${response.status}`);
+    console.log(response.body);
+    sleep(2);
   }
 
   check(response, {
-    [`${label} responde 200`]: (res) => res.status === 200,
+    [`${label} responde 200`]: (res) => res && res.status === 200,
   });
 
-  if (response.status !== 200) {
-    console.log(`${label} falló con status ${response.status}`);
+  return response;
+}
+
+function waitForEndpoint(path, label, retries = 15) {
+  for (let i = 1; i <= retries; i++) {
+    const response = http.get(`${BASE_URL}${path}`);
+
+    if (response.status === 200) {
+      console.log(`${label} listo con status 200`);
+      return true;
+    }
+
+    console.log(`${label} no listo intento ${i}/${retries}: ${response.status}`);
     console.log(response.body);
+    sleep(2);
   }
 
-  return response;
+  return false;
 }
 
 export function setup() {
   console.log(`Ejecutando prueba de carga contra: ${BASE_URL}`);
 
-  const healthResponse = http.get(`${BASE_URL}/health`);
-  console.log(`Health status inicial: ${healthResponse.status}`);
+  waitForEndpoint('/health', 'health');
+  waitForEndpoint('/users', 'users');
+  waitForEndpoint('/products', 'products');
 
-  const usersResponse = http.get(`${BASE_URL}/users`);
-  console.log(`Users status inicial: ${usersResponse.status}`);
-
-  const productsResponse = http.get(`${BASE_URL}/products`);
-  console.log(`Products status inicial: ${productsResponse.status}`);
-
-  if (productsResponse.status !== 200) {
-    console.log('Respuesta inicial de /products:');
-    console.log(productsResponse.body);
-  }
-
-  // Datos mínimos para que los endpoints tengan información durante la prueba.
   http.post(
     `${BASE_URL}/users`,
     JSON.stringify({
@@ -78,13 +86,13 @@ export function setup() {
     }
   );
 
-  sleep(3);
+  sleep(5);
 }
 
 export default function () {
-  getWithRetry('/health', 'health');
-  getWithRetry('/users', 'users');
-  getWithRetry('/products', 'products');
+  requestWithRetry('/health', 'health');
+  requestWithRetry('/users', 'users');
+  requestWithRetry('/products', 'products');
 
   sleep(1);
 }

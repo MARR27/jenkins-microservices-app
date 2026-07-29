@@ -7,11 +7,9 @@ const port = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// URLs internas de los microservicios
 const USER_SERVICE_URL = process.env.USER_SERVICE_URL || 'http://user-service:3001';
 const PRODUCT_SERVICE_URL = process.env.PRODUCT_SERVICE_URL || 'http://product-service:3002';
 
-// Función genérica para llamar microservicios
 const callService = async (baseUrl, req) => {
   const response = await axios({
     method: req.method,
@@ -20,39 +18,50 @@ const callService = async (baseUrl, req) => {
     headers: {
       'Content-Type': 'application/json',
     },
-    timeout: 3000,
+    timeout: 10000,
+    validateStatus: () => true,
   });
 
-  return response.data;
+  if (response.status >= 500) {
+    const error = new Error(`Request failed with status code ${response.status}`);
+    error.response = response;
+    throw error;
+  }
+
+  return {
+    status: response.status,
+    data: response.data,
+  };
 };
 
-// Circuit breaker para User Service
+const breakerOptions = {
+  timeout: 12000,
+  errorThresholdPercentage: 75,
+  resetTimeout: 5000,
+  rollingCountTimeout: 10000,
+  rollingCountBuckets: 5,
+  volumeThreshold: 10,
+};
+
 const userServiceBreaker = new CircuitBreaker(
   async (req) => callService(USER_SERVICE_URL, req),
-  {
-    timeout: 3000,
-    errorThresholdPercentage: 50,
-    resetTimeout: 10000,
-  }
+  breakerOptions
 );
 
-// Circuit breaker para Product Service
 const productServiceBreaker = new CircuitBreaker(
   async (req) => callService(PRODUCT_SERVICE_URL, req),
-  {
-    timeout: 3000,
-    errorThresholdPercentage: 50,
-    resetTimeout: 10000,
-  }
+  breakerOptions
 );
 
-// Middleware de logging
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
   next();
 });
 
-// Health check del gateway
+const sendServiceResponse = (res, result) => {
+  return res.status(result.status).json(result.data);
+};
+
 app.get('/health', async (req, res) => {
   res.json({
     status: 'healthy',
@@ -65,7 +74,6 @@ app.get('/health', async (req, res) => {
   });
 });
 
-// Métricas en formato Prometheus
 app.get('/metrics', (req, res) => {
   const memory = process.memoryUsage();
 
@@ -93,13 +101,12 @@ api_gateway_product_circuit_open ${productServiceBreaker.opened ? 1 : 0}
 `);
 });
 
-// Rutas hacia User Service
 app.all('/users', async (req, res) => {
   try {
     const result = await userServiceBreaker.fire(req);
-    res.json(result);
+    return sendServiceResponse(res, result);
   } catch (error) {
-    res.status(503).json({
+    return res.status(503).json({
       error: 'Service Unavailable',
       message: 'User service is currently unavailable',
       detail: error.message,
@@ -110,9 +117,9 @@ app.all('/users', async (req, res) => {
 app.all('/users/:id', async (req, res) => {
   try {
     const result = await userServiceBreaker.fire(req);
-    res.json(result);
+    return sendServiceResponse(res, result);
   } catch (error) {
-    res.status(503).json({
+    return res.status(503).json({
       error: 'Service Unavailable',
       message: 'User service is currently unavailable',
       detail: error.message,
@@ -120,13 +127,12 @@ app.all('/users/:id', async (req, res) => {
   }
 });
 
-// Rutas hacia Product Service
 app.all('/products', async (req, res) => {
   try {
     const result = await productServiceBreaker.fire(req);
-    res.json(result);
+    return sendServiceResponse(res, result);
   } catch (error) {
-    res.status(503).json({
+    return res.status(503).json({
       error: 'Service Unavailable',
       message: 'Product service is currently unavailable',
       detail: error.message,
@@ -137,9 +143,9 @@ app.all('/products', async (req, res) => {
 app.all('/products/:id', async (req, res) => {
   try {
     const result = await productServiceBreaker.fire(req);
-    res.json(result);
+    return sendServiceResponse(res, result);
   } catch (error) {
-    res.status(503).json({
+    return res.status(503).json({
       error: 'Service Unavailable',
       message: 'Product service is currently unavailable',
       detail: error.message,
@@ -147,7 +153,6 @@ app.all('/products/:id', async (req, res) => {
   }
 });
 
-// Ruta por defecto
 app.use((req, res) => {
   res.status(404).json({
     error: 'Route not found',

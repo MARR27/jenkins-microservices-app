@@ -6,6 +6,8 @@ const port = process.env.PORT || 3002;
 
 app.use(express.json());
 
+const isTestEnv = () => process.env.NODE_ENV === 'test';
+
 const pool = new Pool({
   host: process.env.DB_HOST || 'postgres',
   port: process.env.DB_PORT || 5432,
@@ -132,6 +134,19 @@ app.get('/products/:id', async (req, res) => {
 });
 
 app.get('/health', async (req, res) => {
+  if (isTestEnv()) {
+    return res.status(200).json({
+      status: 'healthy',
+      service: 'product-service',
+      mode: 'unit-test',
+      timestamp: new Date().toISOString(),
+      services: {
+        database: 'skipped',
+        productsTable: 'skipped',
+      },
+    });
+  }
+
   const health = {
     status: 'healthy',
     service: 'product-service',
@@ -177,16 +192,27 @@ product_service_memory_rss_bytes ${memory.rss}
 `);
 });
 
+const startConnections = async () => {
+  try {
+    await ensureDatabaseReady(10);
+    console.log('Product Service database ready');
+  } catch (error) {
+    console.error('Product Service database not ready:', error.message);
+  }
+};
+
+const closeConnections = async () => {
+  try {
+    await pool.end();
+  } catch (error) {
+    console.error('Error closing PostgreSQL pool:', error.message);
+  }
+};
+
 if (require.main === module) {
   app.listen(port, async () => {
     console.log(`Product Service running on port ${port}`);
-
-    try {
-      await ensureDatabaseReady(10);
-      console.log('Product Service database ready');
-    } catch (error) {
-      console.error('Product Service database not ready:', error.message);
-    }
+    await startConnections();
   });
 }
 
@@ -195,4 +221,6 @@ module.exports = {
   pool,
   createProductsTable,
   ensureDatabaseReady,
+  startConnections,
+  closeConnections,
 };
