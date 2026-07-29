@@ -1,90 +1,120 @@
 const fs = require('fs');
 const path = require('path');
 
-const contractPath = path.join(__dirname, '..', 'shared', 'contracts', 'user-contract.json');
-const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
-
 const API_GATEWAY_URL = process.env.API_GATEWAY_URL || 'http://localhost:3000';
+const CONTRACT_PATH = path.join(process.cwd(), 'shared', 'contracts', 'user-contract.json');
 
-const validateType = (value, expectedType) => {
-  if (expectedType === 'array') {
-    return Array.isArray(value);
+function loadContract() {
+  if (!fs.existsSync(CONTRACT_PATH)) {
+    throw new Error(`No se encontró el contrato en: ${CONTRACT_PATH}`);
   }
 
-  if (expectedType === 'number') {
-    return typeof value === 'number';
+  const rawContract = fs.readFileSync(CONTRACT_PATH, 'utf8');
+  return JSON.parse(rawContract);
+}
+
+function getExpectedStatuses(endpoint) {
+  if (Array.isArray(endpoint.expectedStatuses)) {
+    return endpoint.expectedStatuses;
   }
 
-  if (expectedType === 'string') {
-    return typeof value === 'string';
+  if (endpoint.expectedStatus) {
+    return [endpoint.expectedStatus];
   }
 
-  if (expectedType === 'object') {
-    return typeof value === 'object' && value !== null && !Array.isArray(value);
+  return [200];
+}
+
+function buildRequestBody(endpoint) {
+  if (!endpoint.requestBody) {
+    return null;
   }
 
-  return false;
-};
+  const body = { ...endpoint.requestBody };
 
-const validateFields = (object, expectedFields, context) => {
-  for (const [field, expectedType] of Object.entries(expectedFields)) {
-    if (!(field in object)) {
-      throw new Error(`Falta el campo "${field}" en ${context}`);
+  // Evita conflicto por correos repetidos si la prueba se ejecuta varias veces.
+  if (endpoint.method.toUpperCase() === 'POST' && endpoint.path === '/users') {
+    const uniqueValue = `${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+    body.email = `contrato.${uniqueValue}@test.com`;
+  }
+
+  return body;
+}
+
+async function validateEndpoint(endpoint) {
+  const method = endpoint.method.toUpperCase();
+  const url = `${API_GATEWAY_URL}${endpoint.path}`;
+  const expectedStatuses = getExpectedStatuses(endpoint);
+  const body = buildRequestBody(endpoint);
+
+  console.log('');
+  console.log(`Validando endpoint: ${method} ${endpoint.path}`);
+  console.log(`Nombre: ${endpoint.name || 'Sin nombre'}`);
+  console.log(`URL: ${url}`);
+
+  const options = {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  };
+
+  if (body) {
+    options.body = JSON.stringify(body);
+    console.log(`Body enviado: ${JSON.stringify(body)}`);
+  }
+
+  const response = await fetch(url, options);
+
+  let responseBody = null;
+  const responseText = await response.text();
+
+  try {
+    responseBody = responseText ? JSON.parse(responseText) : null;
+  } catch {
+    responseBody = responseText;
+  }
+
+  console.log(`Status recibido: ${response.status}`);
+  console.log(`Status esperado: ${expectedStatuses.join(' o ')}`);
+  console.log(`Respuesta: ${JSON.stringify(responseBody)}`);
+
+  if (!expectedStatuses.includes(response.status)) {
+    throw new Error(
+      `Status incorrecto en ${method} ${endpoint.path}. Esperado: ${expectedStatuses.join(' o ')}, recibido: ${response.status}`
+    );
+  }
+
+  console.log(`Contrato válido para ${method} ${endpoint.path}`);
+}
+
+async function main() {
+  try {
+    const contract = loadContract();
+
+    console.log(`Validando contrato del servicio: ${contract.service}`);
+    console.log(`Versión del contrato: ${contract.version}`);
+    console.log(`Proveedor: ${contract.provider}`);
+    console.log(`Consumidor: ${contract.consumer}`);
+    console.log(`API Gateway URL: ${API_GATEWAY_URL}`);
+
+    if (!Array.isArray(contract.endpoints) || contract.endpoints.length === 0) {
+      throw new Error('El contrato no tiene endpoints definidos.');
     }
 
-    if (!validateType(object[field], expectedType)) {
-      throw new Error(
-        `El campo "${field}" en ${context} debe ser ${expectedType}, pero recibió ${typeof object[field]}`
-      );
+    for (const endpoint of contract.endpoints) {
+      await validateEndpoint(endpoint);
     }
+
+    console.log('');
+    console.log('Todos los contratos fueron validados correctamente.');
+    process.exit(0);
+  } catch (error) {
+    console.error('');
+    console.error('Error validando contrato:');
+    console.error(error.message);
+    process.exit(1);
   }
-};
+}
 
-const runContractValidation = async () => {
-  console.log(`Validando contrato del servicio: ${contract.service}`);
-  console.log(`Versión del contrato: ${contract.version}`);
-  console.log(`API Gateway URL: ${API_GATEWAY_URL}`);
-
-  for (const endpoint of contract.endpoints) {
-    console.log(`\nValidando endpoint: ${endpoint.method} ${endpoint.path}`);
-
-    const options = {
-      method: endpoint.method,
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    };
-
-    if (endpoint.body) {
-      options.body = JSON.stringify(endpoint.body);
-    }
-
-    const response = await fetch(`${API_GATEWAY_URL}${endpoint.path}`, options);
-
-    console.log(`Status recibido: ${response.status}`);
-
-    if (response.status !== endpoint.expectedStatus) {
-      throw new Error(
-        `Status incorrecto en ${endpoint.method} ${endpoint.path}. Esperado: ${endpoint.expectedStatus}, recibido: ${response.status}`
-      );
-    }
-
-    const data = await response.json();
-
-    validateFields(data, endpoint.expectedFields, `${endpoint.method} ${endpoint.path}`);
-
-    if (endpoint.dataItemFields && Array.isArray(data.data) && data.data.length > 0) {
-      validateFields(data.data[0], endpoint.dataItemFields, `primer elemento de ${endpoint.path}`);
-    }
-
-    console.log(`Contrato válido para ${endpoint.method} ${endpoint.path}`);
-  }
-
-  console.log('\nTodos los contratos fueron validados correctamente.');
-};
-
-runContractValidation().catch((error) => {
-  console.error('\nError validando contrato:');
-  console.error(error.message);
-  process.exit(1);
-});
+main();

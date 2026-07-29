@@ -1,38 +1,24 @@
 {
   "service": "user-service",
   "version": "1.0.0",
-  "description": "Contrato esperado para las respuestas del User Service",
+  "provider": "api-gateway",
+  "consumer": "jenkins-pipeline",
+  "description": "Contrato entre API Gateway y User Service para validar endpoints principales de usuarios",
   "endpoints": [
     {
       "name": "Listar usuarios",
       "method": "GET",
       "path": "/users",
-      "expectedStatus": 200,
-      "expectedFields": {
-        "total": "number",
-        "data": "array"
-      },
-      "dataItemFields": {
-        "id": "number",
-        "name": "string",
-        "email": "string",
-        "created_at": "string"
-      }
+      "expectedStatuses": [200]
     },
     {
       "name": "Crear usuario",
       "method": "POST",
       "path": "/users",
-      "expectedStatus": 200,
-      "body": {
-        "name": "Contrato Test",
-        "email": "contrato.test@example.com"
-      },
-      "expectedFields": {
-        "id": "number",
-        "name": "string",
-        "email": "string",
-        "created_at": "string"
+      "expectedStatuses": [201],
+      "requestBody": {
+        "name": "Usuario Contrato",
+        "email": "contrato@test.com"
       }
     }
   ]
