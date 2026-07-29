@@ -3,7 +3,7 @@ pipeline {
 
     options {
         timestamps()
-        timeout(time: 45, unit: 'MINUTES')
+        timeout(time: 60, unit: 'MINUTES')
     }
 
     environment {
@@ -52,14 +52,17 @@ pipeline {
                 echo 'Instalando dependencias de los tres microservicios...'
 
                 sh '''
+                    echo "Instalando dependencias de API Gateway..."
                     cd services/api-gateway
                     npm ci || npm install
                     cd ../..
 
+                    echo "Instalando dependencias de User Service..."
                     cd services/user-service
                     npm ci || npm install
                     cd ../..
 
+                    echo "Instalando dependencias de Product Service..."
                     cd services/product-service
                     npm ci || npm install
                     cd ../..
@@ -72,14 +75,17 @@ pipeline {
                 echo 'Ejecutando pruebas unitarias de cada microservicio...'
 
                 sh '''
+                    echo "Probando API Gateway..."
                     cd services/api-gateway
                     npm test
                     cd ../..
 
+                    echo "Probando User Service..."
                     cd services/user-service
                     npm test
                     cd ../..
 
+                    echo "Probando Product Service..."
                     cd services/product-service
                     npm test
                     cd ../..
@@ -106,12 +112,21 @@ pipeline {
                 echo 'Levantando ambiente efímero con Docker Compose...'
 
                 sh '''
+                    echo "Limpiando ambiente efímero anterior antes de desplegar..."
+                    docker compose -p "$COMPOSE_PROJECT_NAME" \
+                        -f "$COMPOSE_FILE" \
+                        --profile app \
+                        --profile monitoring \
+                        down -v --remove-orphans || true
+
+                    echo "Levantando ambiente efímero limpio..."
                     docker compose -p "$COMPOSE_PROJECT_NAME" \
                         -f "$COMPOSE_FILE" \
                         --profile app \
                         --profile monitoring \
                         up -d
 
+                    echo "Estado del ambiente efímero:"
                     docker compose -p "$COMPOSE_PROJECT_NAME" \
                         -f "$COMPOSE_FILE" \
                         --profile app \
@@ -199,7 +214,7 @@ pipeline {
                     -f "$COMPOSE_FILE" \
                     --profile app \
                     --profile monitoring \
-                    down --remove-orphans || true
+                    down -v --remove-orphans || true
             '''
         }
 
