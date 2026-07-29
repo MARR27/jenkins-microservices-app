@@ -43,7 +43,7 @@ services:
       DB_PASSWORD: password
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      RABBITMQ_URL: amqp://rabbitmq
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
     depends_on:
       postgres:
         condition: service_healthy
@@ -139,10 +139,18 @@ services:
       - performance
 
   rabbitmq:
-    image: rabbitmq:3-management-alpine
+    build:
+      context: ../docker/rabbitmq
+      dockerfile: Dockerfile
+    hostname: rabbitmq
     ports:
       - "5673:5672"
       - "15673:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+      RABBITMQ_ERLANG_COOKIE: microservices_secret_cookie
+      RABBITMQ_NODENAME: rabbit@rabbitmq
     networks:
       - microservices-network
     healthcheck:
